@@ -12,6 +12,7 @@ plugins {
 
     alias(libs.plugins.detekt) apply false
     alias(libs.plugins.spotless)
+    alias(libs.plugins.kover)
 }
 
 spotless {
@@ -28,8 +29,44 @@ spotless {
     }
 }
 
+kover {
+    reports {
+        filters {
+            excludes {
+                annotatedBy(
+                    "androidx.compose.ui.tooling.preview.Preview",
+                    "org.jetbrains.compose.ui.tooling.preview.Preview",
+                )
+                classes(
+                    "*.BuildConfig",
+                    "*ComposableSingletons*",
+                    "*.R",
+                    "*.R\$*",
+                )
+                packages("adianta.shared.generated.resources")
+                classes(
+                    "*_androidKt",
+                    "*.AndroidPlatform",
+                )
+            }
+        }
+        total {
+            verify {
+                rule("Cobertura minima de linhas") {
+                    minBound(50)
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    kover(project(":shared"))
+}
+
 subprojects {
     apply(plugin = "dev.detekt")
+    apply(plugin = "org.jetbrains.kotlinx.kover")
 
     extensions.configure<DetektExtension> {
         parallel = true
@@ -54,5 +91,15 @@ subprojects {
         group = "verification"
         description = "Executa todas as analises do detekt deste modulo"
         dependsOn(tasks.withType<Detekt>())
+    }
+
+    tasks.withType<AbstractTestTask>().configureEach {
+        val testKind = providers.gradleProperty("testKind").orNull ?: return@configureEach
+        filter.isFailOnNoMatchingTests = false
+        when (testKind) {
+            "unit" -> filter.excludeTestsMatching("*ComponentTest")
+            "component" -> filter.includeTestsMatching("*ComponentTest")
+            else -> error("testKind invalido: $testKind (use 'unit' ou 'component')")
+        }
     }
 }
