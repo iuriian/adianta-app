@@ -20,9 +20,14 @@ PADRAO = "*/build/reports/detekt/*.xml"
 
 
 def coleta():
-    """Le todos os relatorios e devolve os achados distintos, ordenados."""
+    """Le todos os relatorios e devolve os achados distintos, ordenados.
+
+    Cada achado e (modulo, arquivo, linha, regra, mensagem). O modulo vem do
+    caminho do relatorio e serve para montar o comando de revalidacao.
+    """
     vistos = set()
     for caminho in sorted(glob.glob(PADRAO)):
+        modulo = caminho.replace(os.sep, "/").split("/")[0]
         try:
             raiz = ET.parse(caminho).getroot()
         except (ET.ParseError, OSError):
@@ -34,6 +39,7 @@ def coleta():
             for erro in no.findall("error"):
                 vistos.add(
                     (
+                        modulo,
                         arquivo,
                         int(erro.get("line") or 0),
                         (erro.get("source") or "?").rsplit(".", 1)[-1],
@@ -48,23 +54,28 @@ def markdown(achados):
     if not achados:
         return linhas + ["Nenhum achado nos relatorios."]
 
-    por_regra = {}
-    for _, _, regra, _ in achados:
-        por_regra[regra] = por_regra.get(regra, 0) + 1
-    resumo = ", ".join(
-        "`{0}` x{1}".format(regra, qtd)
-        for regra, qtd in sorted(por_regra.items(), key=lambda par: (-par[1], par[0]))
-    )
+#     por_regra = {}
+#     for _, _, _, regra, _ in achados:
+#         por_regra[regra] = por_regra.get(regra, 0) + 1
+#     resumo = ", ".join(
+#         "`{0}` x{1}".format(regra, qtd)
+#         for regra, qtd in sorted(por_regra.items(), key=lambda par: (-par[1], par[0]))
+#     )
+    linhas += ["{0} achado(s) em {1} arquivo(s):".format(
+        len(achados), len(set(a[1] for a in achados))), ""]
 
-    linhas += ["{0} achado(s): {1}".format(len(achados), resumo), ""]
-    linhas += ["| Arquivo | Linha | Regra | Mensagem |", "| --- | --- | --- | --- |"]
-    barra = chr(92) + "|"
-    for arquivo, linha, regra, mensagem in achados:
-        linhas.append(
-            "| `{0}` | {1} | `{2}` | {3} |".format(
-                arquivo, linha, regra, mensagem.replace("|", barra)
-            )
-        )
+    # as regras deste projeto nao tem correcao automatica (autoCorrect = false),
+    # entao o comando util e o que revalida cada modulo afetado
+    linhas += ["Corrija os arquivos abaixo e revalide:", "", "```sh"]
+    linhas += [
+        "./gradlew :{0}:detektAll".format(modulo)
+        for modulo in sorted(set(a[0] for a in achados))
+    ]
+    linhas += ["```", ""]
+
+    linhas += ["| Arquivo | Linha | Regra |", "| --- | --- | --- |"]
+    for _, arquivo, linha, regra, _ in achados:
+        linhas.append("| `{0}` | {1} | `{2}` |".format(arquivo, linha, regra))
     return linhas
 
 
