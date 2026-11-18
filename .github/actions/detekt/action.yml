@@ -61,6 +61,9 @@ runs:
       shell: bash
       env:
         RESULTADO: ${{ steps.analise.outputs.resultado }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        RUN_NUMERO: ${{ github.run_number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         corpo="$RUNNER_TEMP/detekt.md"
         total=$(python3 "$GITHUB_ACTION_PATH/detekt-md.py" "$corpo")
@@ -71,6 +74,10 @@ runs:
             echo 'O Detekt falhou sem produzir achados: provavelmente erro de configuracao ou de compilacao. Veja os logs do job.'
           } >> "$corpo"
         fi
+        {
+          echo
+          echo "<sub>Relatorio do commit ${SHA:0:7}, run [#$RUN_NUMERO]($RUN_URL).</sub>"
+        } >> "$corpo"
         cat "$corpo" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comentario no PR
@@ -79,6 +86,7 @@ runs:
       with:
         header: detekt
         path: ${{ runner.temp }}/detekt.md
+        recreate: true
 
     - name: Remove o comentario quando resolvido
       if: ${{ steps.contexto.outputs.comenta == 'true' && steps.achados.outputs.total == '0' && steps.analise.outputs.resultado == 'success' }}

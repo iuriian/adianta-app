@@ -61,6 +61,9 @@ runs:
         TAREFA: ${{ inputs.tarefa }}
         CORRECAO: ${{ inputs.correcao }}
         ALVOS: ${{ inputs.alvos }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        RUN_NUMERO: ${{ github.run_number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         corpo="$RUNNER_TEMP/spotless.md"
         {
@@ -128,6 +131,10 @@ runs:
             echo 'Saida truncada, rode o comando acima localmente para ver o resto.'
           } >> "$corpo"
         fi
+        {
+          echo
+          echo "<sub>Relatorio do commit ${SHA:0:7}, run [#$RUN_NUMERO]($RUN_URL).</sub>"
+        } >> "$corpo"
         cat "$corpo" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comentario no PR
@@ -136,6 +143,7 @@ runs:
       with:
         header: spotless
         path: ${{ runner.temp }}/spotless.md
+        recreate: true
 
     - name: Remove o comentario quando resolvido
       if: ${{ steps.contexto.outputs.comenta == 'true' && steps.verificacao.outputs.resultado == 'success' }}
