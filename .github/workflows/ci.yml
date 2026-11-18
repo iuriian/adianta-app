@@ -15,47 +15,123 @@ jobs:
   format:
     name: Formatacao
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-build
 
       - name: spotlessCheck
+        id: spotless
         run: ./gradlew spotlessCheck
 
-      - name: Diff do que esta fora do padrao
-        if: failure()
+      - name: Monta o diff do que esta fora do padrao
+        if: ${{ !cancelled() && steps.spotless.outcome == 'failure' }}
         run: |
           ./gradlew spotlessApply -q
+          corpo="$RUNNER_TEMP/spotless.md"
           {
-            echo '## Spotless'
+            echo '## Formatacao (Spotless)'
+            echo
+            echo 'Rode `./gradlew spotlessApply` e commite o resultado.'
+            echo
+            echo '<details><summary>Diff sugerido</summary>'
+            echo
             echo '```diff'
             git diff
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo
+            echo '</details>'
+          } > "$corpo"
+          if [ "$(wc -c < "$corpo")" -gt 60000 ]; then
+            head -c 60000 "$corpo" > "$corpo.cut"
+            mv "$corpo.cut" "$corpo"
+            {
+              echo '```'
+              echo
+              echo '</details>'
+              echo
+              echo 'Diff truncado, rode o comando localmente para ver o resto.'
+            } >> "$corpo"
+          fi
+          cat "$corpo" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comentario no PR
+        if: ${{ !cancelled() && steps.spotless.outcome == 'failure' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: spotless
+          path: ${{ runner.temp }}/spotless.md
+
+      - name: Remove o comentario quando resolvido
+        if: ${{ steps.spotless.outcome == 'success' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: spotless
+          delete: true
 
   detekt:
     name: Analise estatica
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-build
 
       - name: detektAll
+        id: detekt
         run: ./gradlew detektAll --continue
 
-      - name: Achados no resumo do job
+      - name: Monta os achados
         if: ${{ !cancelled() }}
         run: |
-          echo '## Detekt' >> "$GITHUB_STEP_SUMMARY"
+          corpo="$RUNNER_TEMP/detekt.md"
+          {
+            echo '## Analise estatica (Detekt)'
+            echo
+          } > "$corpo"
           achou=0
-          for f in */build/reports/detekt/*.md; do
+          for f in $(find . -path '*/build/reports/detekt/*.md' -not -path './build/*' | sort); do
             [ -s "$f" ] || continue
             achou=1
-            printf '<details><summary>%s</summary>\n\n' "$f" >> "$GITHUB_STEP_SUMMARY"
-            cat "$f" >> "$GITHUB_STEP_SUMMARY"
-            printf '\n</details>\n' >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "<details><summary>$f</summary>"
+              echo
+              cat "$f"
+              echo
+              echo '</details>'
+              echo
+            } >> "$corpo"
           done
-          [ "$achou" = 1 ] || echo 'Nenhum finding.' >> "$GITHUB_STEP_SUMMARY"
+          [ "$achou" = 1 ] || echo 'Nenhum relatorio gerado, veja os logs do job.' >> "$corpo"
+          if [ "$(wc -c < "$corpo")" -gt 60000 ]; then
+            head -c 60000 "$corpo" > "$corpo.cut"
+            mv "$corpo.cut" "$corpo"
+            {
+              echo
+              echo '</details>'
+              echo
+              echo 'Achados truncados, baixe o artefato detekt.'
+            } >> "$corpo"
+          fi
+          cat "$corpo" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comentario no PR
+        if: ${{ !cancelled() && steps.detekt.outcome == 'failure' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: detekt
+          path: ${{ runner.temp }}/detekt.md
+
+      - name: Remove o comentario quando resolvido
+        if: ${{ steps.detekt.outcome == 'success' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: detekt
+          delete: true
 
       - name: Relatorios do Detekt
         if: ${{ !cancelled() }}
@@ -238,27 +314,3 @@ jobs:
           name: framework-ios
           path: shared/build/bin/iosArm64/releaseFramework/**
           retention-days: 7
-
-  ci:
-    name: CI
-    runs-on: ubuntu-latest
-    if: always()
-    needs:
-      - format
-      - detekt
-      - unit-tests
-      - component-tests
-      - ios-tests
-      - coverage
-      - build-android
-      - build-ios
-    steps:
-      - name: Consolida resultado dos jobs
-        env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: |
-          echo "Resultados: $RESULTS"
-          case "$RESULTS" in
-            *failure*|*cancelled*) echo 'Algum gate falhou.' >&2; exit 1 ;;
-          esac
-          echo 'Todos os gates passaram.'
