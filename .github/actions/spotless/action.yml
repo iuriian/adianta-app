@@ -1,0 +1,141 @@
+name: Spotless
+description: Verifica a formatacao e comenta na timeline do PR o diff necessario para corrigir.
+
+inputs:
+  tarefa:
+    description: Tarefa Gradle de verificacao.
+    default: spotlessCheck
+  correcao:
+    description: Tarefa Gradle que corrige, usada para gerar o diff do comentario.
+    default: spotlessApply
+  alvos:
+    description: Padroes de arquivo do diff, separados por espaco. Limita o diff ao que a formatacao toca.
+    default: '**/*.kt **/*.gradle.kts'
+  comentario:
+    description: Mantem um comentario fixo no PR com o diff. Ignorado fora de pull_request e em PR de fork.
+    default: 'true'
+
+outputs:
+  resultado:
+    description: success ou failure da tarefa de verificacao.
+    value: ${{ steps.verificacao.outputs.resultado }}
+
+runs:
+  using: composite
+  steps:
+    - name: Contexto do comentario
+      id: contexto
+      shell: bash
+      env:
+        LIGADO: ${{ inputs.comentario }}
+        EVENTO: ${{ github.event_name }}
+        ORIGEM: ${{ github.event.pull_request.head.repo.full_name }}
+        REPO: ${{ github.repository }}
+      run: |
+        # PR de fork recebe GITHUB_TOKEN somente leitura, comentar falharia o job
+        comenta=false
+        if [ "$LIGADO" = true ] && [ "$EVENTO" = pull_request ] && [ "$ORIGEM" = "$REPO" ]; then
+          comenta=true
+        fi
+        echo "comenta=$comenta" >> "$GITHUB_OUTPUT"
+
+    - name: Verificacao
+      id: verificacao
+      shell: bash
+      env:
+        TAREFA: ${{ inputs.tarefa }}
+      run: |
+        # o resultado vira output em vez de falhar aqui, para os steps seguintes
+        # (diff, comentario) rodarem antes do job ser reprovado
+        set -o pipefail
+        if ./gradlew "$TAREFA" 2>&1 | tee "$RUNNER_TEMP/spotless.log"; then
+          echo 'resultado=success' >> "$GITHUB_OUTPUT"
+        else
+          echo 'resultado=failure' >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Monta o diff do que esta fora do padrao
+      if: ${{ steps.verificacao.outputs.resultado == 'failure' }}
+      shell: bash
+      env:
+        TAREFA: ${{ inputs.tarefa }}
+        CORRECAO: ${{ inputs.correcao }}
+        ALVOS: ${{ inputs.alvos }}
+      run: |
+        corpo="$RUNNER_TEMP/spotless.md"
+        {
+          echo '## Formatacao (Spotless)'
+          echo
+          echo "Rode \`./gradlew $CORRECAO\` e commite o resultado."
+          echo
+        } > "$corpo"
+        if ! ./gradlew "$CORRECAO" -q; then
+          {
+            echo "O $CORRECAO nao concluiu, abaixo a saida do $TAREFA."
+            echo
+          } >> "$corpo"
+        fi
+        # set -f: o split por espaco e intencional, mas o shell nao deve
+        # expandir os padroes contra o filesystem, quem resolve e o git
+        set -f
+        alvos=()
+        for padrao in $ALVOS; do
+          alvos+=(":(glob)$padrao")
+        done
+        set +f
+        if git diff --quiet -- "${alvos[@]}"; then
+          {
+            echo '<details><summary>Saida da verificacao</summary>'
+            echo
+            echo '```'
+            tail -120 "$RUNNER_TEMP/spotless.log"
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$corpo"
+        else
+          {
+            echo '<details><summary>Diff sugerido</summary>'
+            echo
+            echo '```diff'
+            git diff -- "${alvos[@]}"
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$corpo"
+        fi
+        if [ "$(wc -c < "$corpo")" -gt 60000 ]; then
+          head -c 60000 "$corpo" > "$corpo.cut"
+          mv "$corpo.cut" "$corpo"
+          {
+            echo '```'
+            echo
+            echo '</details>'
+            echo
+            echo 'Saida truncada, rode o comando localmente para ver o resto.'
+          } >> "$corpo"
+        fi
+        cat "$corpo" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comentario no PR
+      if: ${{ steps.contexto.outputs.comenta == 'true' && steps.verificacao.outputs.resultado == 'failure' }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: spotless
+        path: ${{ runner.temp }}/spotless.md
+
+    - name: Remove o comentario quando resolvido
+      if: ${{ steps.contexto.outputs.comenta == 'true' && steps.verificacao.outputs.resultado == 'success' }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: spotless
+        delete: true
+
+    - name: Resultado
+      if: ${{ steps.verificacao.outputs.resultado == 'failure' }}
+      shell: bash
+      env:
+        TAREFA: ${{ inputs.tarefa }}
+      run: |
+        echo "O $TAREFA reprovou, veja o diff no comentario do PR ou no resumo do job." >&2
+        exit 1
