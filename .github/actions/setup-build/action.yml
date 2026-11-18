@@ -9,8 +9,6 @@ inputs:
 runs:
   using: composite
   steps:
-    # o bit de execucao do gradlew se perde facil em fluxo Windows (core.filemode
-    # false), e sem ele todo job morre com "./gradlew: Permission denied"
     - name: Garante o wrapper executavel
       shell: bash
       run: chmod +x gradlew
@@ -23,6 +21,7 @@ runs:
     - uses: gradle/actions/setup-gradle@v6
       with:
         cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+        add-job-summary: never
 
     - if: inputs.konan == 'true'
       uses: actions/cache@v6
