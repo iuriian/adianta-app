@@ -1,12 +1,17 @@
 package com.adianta
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class SharedLogicAndroidHostTest {
-
     @Test
-    fun example() {
-        assertEquals(3, 1 + 2)
+    fun givenTheAndroidTarget_whenGetPlatform_thenNameIdentifiesAndroid() {
+        // given: o actual de androidMain, que monta o nome a partir do Build
+
+        // when
+        val platform = getPlatform()
+
+        // then
+        assertTrue(platform.name.startsWith("Android"), "nome da plataforma: '${platform.name}'")
     }
 }

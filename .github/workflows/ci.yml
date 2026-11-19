@@ -1,0 +1,209 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ develop ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Formatacao
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+      - uses: ./.github/actions/spotless
+
+  detekt:
+    name: Analise estatica
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+      - uses: ./.github/actions/detekt
+
+  unit-tests:
+    name: Testes unitarios
+    runs-on: ubuntu-latest
+    needs: [ format, detekt ]
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+
+      - name: Testes unitarios (commonTest + androidHostTest + androidApp)
+        run: ./gradlew :shared:testAndroidHostTest :androidApp:testDebugUnitTest -PtestKind=unit --continue
+
+      - name: Resultado
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: '**/build/test-results/**/TEST-*.xml'
+          check_name: Testes unitarios
+          detailed_summary: true
+          include_passed: false
+          require_tests: false
+
+  component-tests:
+    name: Testes de componente
+    runs-on: ubuntu-latest
+    needs: [ format, detekt ]
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+
+      - name: Testes de componente (*ComponentTest, Compose no host)
+        run: ./gradlew :shared:testAndroidHostTest -PtestKind=component --continue
+
+      - name: Resultado
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: '**/build/test-results/**/TEST-*.xml'
+          check_name: Testes de componente
+          detailed_summary: true
+          include_passed: false
+          require_tests: false
+
+  ios-tests:
+    name: Testes iOS (simulador)
+    runs-on: macos-latest
+    needs: [ format, detekt ]
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+        with:
+          konan: 'true'
+
+      - name: Testes unitarios (iOS)
+        if: ${{ !cancelled() }}
+        run: ./gradlew :shared:iosSimulatorArm64Test -PtestKind=unit --continue
+
+      - name: Resultado dos unitarios
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: 'shared/build/test-results/**/TEST-*.xml'
+          check_name: Testes unitarios (iOS)
+          detailed_summary: true
+          include_passed: false
+          require_tests: false
+
+      - name: Testes de componente (iOS)
+        if: ${{ !cancelled() }}
+        run: ./gradlew :shared:iosSimulatorArm64Test -PtestKind=component --continue
+
+      - name: Resultado dos de componente
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: 'shared/build/test-results/**/TEST-*.xml'
+          check_name: Testes de componente (iOS)
+          detailed_summary: true
+          include_passed: false
+          require_tests: false
+
+  coverage:
+    name: Cobertura minima
+    runs-on: ubuntu-latest
+    needs: [ unit-tests, component-tests, ios-tests ]
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+
+      - name: Relatorio (Kover)
+        run: ./gradlew :koverXmlReport --continue
+
+      - name: Percentual no resumo do job
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '## Cobertura'
+            echo '```'
+            ./gradlew :koverLog -q
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comentario no PR
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: madrapps/jacoco-report@v1.8.0
+        with:
+          paths: ${{ github.workspace }}/build/reports/kover/report.xml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: Cobertura mínima
+          update-comment: true
+          min-coverage-overall: 50
+          min-coverage-changed-files: 70
+
+      - name: Gate
+        if: ${{ !cancelled() }}
+        run: ./gradlew :koverVerify
+
+      - name: Relatorio HTML
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cobertura
+          path: build/reports/kover/**
+          retention-days: 7
+
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    needs: [ coverage ]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+
+      - name: assembleDebug
+        run: ./gradlew :androidApp:assembleDebug
+
+      - name: APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-debug
+          path: androidApp/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    needs: [ coverage ]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+        with:
+          konan: 'true'
+
+      - name: linkReleaseFrameworkIosArm64
+        run: ./gradlew :shared:linkReleaseFrameworkIosArm64
+
+      - name: Framework
+        uses: actions/upload-artifact@v7
+        with:
+          name: framework-ios
+          path: shared/build/bin/iosArm64/releaseFramework/**
+          retention-days: 7
