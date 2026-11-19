@@ -153,7 +153,7 @@ jobs:
         with:
           paths: ${{ github.workspace }}/build/reports/kover/report.xml
           token: ${{ secrets.GITHUB_TOKEN }}
-          title: Cobertura (JVM/Android)
+          title: Cobertura mínima
           update-comment: true
           min-coverage-overall: 50
           min-coverage-changed-files: 70
