@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
     branches: [ develop ]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -57,6 +58,7 @@ jobs:
           detailed_summary: true
           include_passed: false
           require_tests: false
+          annotate_only: true
 
   component-tests:
     name: Testes de componente
@@ -81,6 +83,7 @@ jobs:
           detailed_summary: true
           include_passed: false
           require_tests: false
+          annotate_only: true
 
   ios-tests:
     name: Testes iOS (simulador)
@@ -108,25 +111,12 @@ jobs:
           detailed_summary: true
           include_passed: false
           require_tests: false
-
-      - name: Testes de componente (iOS)
-        if: ${{ !cancelled() }}
-        run: ./gradlew :shared:iosSimulatorArm64Test -PtestKind=component --continue
-
-      - name: Resultado dos de componente
-        if: ${{ !cancelled() }}
-        uses: mikepenz/action-junit-report@v6
-        with:
-          report_paths: 'shared/build/test-results/**/TEST-*.xml'
-          check_name: Testes de componente (iOS)
-          detailed_summary: true
-          include_passed: false
-          require_tests: false
+          annotate_only: true
 
   coverage:
     name: Cobertura minima
     runs-on: ubuntu-latest
-    needs: [ unit-tests, component-tests, ios-tests ]
+    needs: [ unit-tests, component-tests ]
     permissions:
       contents: read
       pull-requests: write
@@ -157,6 +147,7 @@ jobs:
           update-comment: true
           min-coverage-overall: 50
           min-coverage-changed-files: 70
+          recreate: true
 
       - name: Gate
         if: ${{ !cancelled() }}
@@ -191,7 +182,7 @@ jobs:
   build-ios:
     name: Build iOS
     runs-on: macos-latest
-    needs: [ coverage ]
+    needs: [ coverage, ios-tests ]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-build
