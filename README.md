@@ -26,6 +26,11 @@ Use o botão de execução na margem do editor da sua IDE, ou execute os testes 
 - Testes Android: `./gradlew :shared:testAndroidHostTest`
 - Testes iOS: `./gradlew :shared:iosSimulatorArm64Test`
 
+### CI
+
+O pipeline roda no GitHub Actions em PRs para `main` ou `develop` (exceto draft) e em execução manual.
+Veja [docs/ci.md](./docs/ci.md).
+
 ---
 
 Saiba mais sobre [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
