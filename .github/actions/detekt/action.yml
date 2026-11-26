@@ -1,0 +1,113 @@
+name: Detekt
+description: Roda o Detekt, comenta os achados na timeline do PR e publica os relatorios.
+
+inputs:
+  tarefa:
+    description: Tarefa Gradle a executar.
+    default: detektAll
+  comentario:
+    description: Mantem um comentario fixo no PR com os achados. Ignorado fora de pull_request e em PR de fork.
+    default: 'true'
+  artefato:
+    description: Nome do artefato com os relatorios. Vazio desliga o upload.
+    default: detekt
+  retencao:
+    description: Dias de retencao do artefato.
+    default: '7'
+
+outputs:
+  total:
+    description: Quantidade de achados distintos.
+    value: ${{ steps.achados.outputs.total }}
+  resultado:
+    description: success ou failure da tarefa do Detekt.
+    value: ${{ steps.analise.outputs.resultado }}
+
+runs:
+  using: composite
+  steps:
+    - name: Contexto do comentario
+      id: contexto
+      shell: bash
+      env:
+        LIGADO: ${{ inputs.comentario }}
+        EVENTO: ${{ github.event_name }}
+        ORIGEM: ${{ github.event.pull_request.head.repo.full_name }}
+        REPO: ${{ github.repository }}
+      run: |
+        # PR de fork recebe GITHUB_TOKEN somente leitura, comentar falharia o job
+        comenta=false
+        if [ "$LIGADO" = true ] && [ "$EVENTO" = pull_request ] && [ "$ORIGEM" = "$REPO" ]; then
+          comenta=true
+        fi
+        echo "comenta=$comenta" >> "$GITHUB_OUTPUT"
+
+    - name: Analise
+      id: analise
+      shell: bash
+      env:
+        TAREFA: ${{ inputs.tarefa }}
+      run: |
+        # o resultado vira output em vez de falhar aqui, para os steps seguintes
+        # (achados, comentario, artefato) rodarem antes do job ser reprovado
+        if ./gradlew "$TAREFA" --continue; then
+          echo 'resultado=success' >> "$GITHUB_OUTPUT"
+        else
+          echo 'resultado=failure' >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Monta os achados
+      id: achados
+      shell: bash
+      env:
+        RESULTADO: ${{ steps.analise.outputs.resultado }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        RUN_NUMERO: ${{ github.run_number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        corpo="$RUNNER_TEMP/detekt.md"
+        total=$(python3 "$GITHUB_ACTION_PATH/detekt-md.py" "$corpo")
+        echo "total=$total" >> "$GITHUB_OUTPUT"
+        if [ "$total" = 0 ] && [ "$RESULTADO" = failure ]; then
+          {
+            echo
+            echo 'O Detekt falhou sem produzir achados: provavelmente erro de configuracao ou de compilacao. Veja os logs do job.'
+          } >> "$corpo"
+        fi
+        {
+          echo
+          echo "<sub>Relatorio do commit ${SHA:0:7}, run [#$RUN_NUMERO]($RUN_URL).</sub>"
+        } >> "$corpo"
+        cat "$corpo" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comentario no PR
+      if: ${{ steps.contexto.outputs.comenta == 'true' && (steps.achados.outputs.total != '0' || steps.analise.outputs.resultado == 'failure') }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: detekt
+        path: ${{ runner.temp }}/detekt.md
+        recreate: true
+
+    - name: Remove o comentario quando resolvido
+      if: ${{ steps.contexto.outputs.comenta == 'true' && steps.achados.outputs.total == '0' && steps.analise.outputs.resultado == 'success' }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: detekt
+        delete: true
+
+    - name: Relatorios
+      if: ${{ inputs.artefato != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artefato }}
+        path: '**/build/reports/detekt/**'
+        retention-days: ${{ inputs.retencao }}
+
+    - name: Resultado
+      if: ${{ steps.analise.outputs.resultado == 'failure' }}
+      shell: bash
+      env:
+        TOTAL: ${{ steps.achados.outputs.total }}
+      run: |
+        echo "O Detekt reprovou com $TOTAL achado(s) distinto(s)." >&2
+        exit 1

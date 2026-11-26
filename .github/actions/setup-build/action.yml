@@ -1,0 +1,31 @@
+name: Setup build
+description: Garante o wrapper executavel, configura JDK (Azul 21) e Gradle com cache, e opcionalmente o cache do Kotlin/Native.
+
+inputs:
+  konan:
+    description: Cacheia ~/.konan (compilador Kotlin/Native, LLVM e platform libs). Use nos jobs Apple.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Garante o wrapper executavel
+      shell: bash
+      run: chmod +x gradlew
+
+    - uses: actions/setup-java@v6
+      with:
+        distribution: zulu
+        java-version: 21
+
+    - uses: gradle/actions/setup-gradle@v6
+      with:
+        cache-read-only: false
+        add-job-summary: never
+
+    - if: inputs.konan == 'true'
+      uses: actions/cache@v6
+      with:
+        path: ~/.konan
+        key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+        restore-keys: konan-${{ runner.os }}-
